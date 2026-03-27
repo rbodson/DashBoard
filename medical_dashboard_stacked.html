@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Dashboard Médical Ultra V10</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<style>
+body { font-family: Arial; margin:0; background:#f4f6fb; }
+.dark { background:#1e1e2f; color:white; }
+header { padding:20px; text-align:center; font-size:24px; }
+nav { display:flex; gap:10px; justify-content:center; padding:10px; }
+nav button { padding:10px 15px; border:none; border-radius:8px; cursor:pointer; }
+.container { padding:20px; display:none; }
+.active { display:block; }
+.grid-3 { display:grid; grid-template-columns: repeat(3,1fr); gap:20px; }
+.card { background:white; padding:20px; border-radius:15px; box-shadow:0 4px 12px rgba(0,0,0,0.1);} 
+.dark .card { background:#2c2c3c; }
+input, select, button { width:100%; padding:10px; margin:5px 0; border-radius:8px; }
+table { width:100%; border-collapse:collapse; }
+th, td { padding:8px; border-bottom:1px solid #ddd; cursor:pointer; }
+th select { width:100%; }
+.category-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
+.category-filters label { display: flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
+.category-filters input[type="checkbox"] { cursor: pointer; }
+.grid-2 { display:grid; grid-template-columns: repeat(2,1fr); gap:20px; }
+</style>
+</head>
+<body>
+<header>Dashboard Médical Ultra</header>
+<nav>
+<button onclick="showPage('dashboard')">Résumé</button>
+<button onclick="showPage('income')">Entrées</button>
+<button onclick="showPage('expense')">Dépenses</button>
+<button onclick="showPage('settings')">Paramètres</button>
+<button onclick="toggleDark()">🌙</button>
+</nav>
+
+<div id="dashboard" class="container active">
+<div class="grid-3">
+<div class="card"><h3>💰 CA total</h3><p id="ca"></p></div>
+<div class="card"><h3>📉 Dépenses totales</h3><p id="dep"></p></div>
+<div class="card"><h3>📈 Bénéfice net</h3><p id="benef"></p></div>
+</div>
+<div class="card"><canvas id="lineChart"></canvas></div>
+<div class="grid-3">
+<div class="card">
+<h3>Entrées par catégorie (mensuel)</h3>
+<div class="category-filters" id="catInFilters"></div>
+<canvas id="catInChart"></canvas>
+</div>
+<div class="card">
+<h3>Dépenses par catégorie (mensuel)</h3>
+<div class="category-filters" id="catOutFilters"></div>
+<canvas id="catOutChart"></canvas>
+</div>
+</div>
+</div>
+
+<div id="income" class="container">
+<div class="card">
+<h2>Ajouter entrée</h2>
+<input type="date" id="dateIn">
+<input id="refIn" placeholder="N° opération">
+<input id="nameIn" placeholder="Patient">
+<input id="amountIn" placeholder="Montant">
+<select id="catIn"></select>
+<button onclick="addIncome()">Ajouter</button>
+</div>
+<div class="card">
+<h2>Historique entrées</h2>
+<table>
+<thead>
+<tr>
+<th onclick="sortData('date')">Date<br><select id="fDateIn" onchange="render()"></select></th>
+<th onclick="sortData('ref')">Ref<br><select id="fRefIn" onchange="render()"></select></th>
+<th onclick="sortData('name')">Nom<br><select id="fNameIn" onchange="render()"></select></th>
+<th onclick="sortData('category')">Catégorie<br><select id="fCatIn" onchange="render()"></select></th>
+<th onclick="sortData('amount')">Montant</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody id="histIn"></tbody>
+</table>
+<p id="totalIn"></p>
+</div>
+</div>
+
+<div id="expense" class="container">
+<div class="card">
+<h2>Ajouter dépense</h2>
+<input type="date" id="dateOut">
+<input id="refOut" placeholder="N° opération">
+<input id="nameOut" placeholder="Fournisseur">
+<input id="amountOut" placeholder="Montant">
+<select id="catOut"></select>
+<button onclick="addExpense()">Ajouter</button>
+</div>
+<div class="card">
+<h2>Historique dépenses</h2>
+<table>
+<thead>
+<tr>
+<th onclick="sortData('date')">Date<br><select id="fDateOut" onchange="render()"></select></th>
+<th onclick="sortData('ref')">Ref<br><select id="fRefOut" onchange="render()"></select></th>
+<th onclick="sortData('name')">Nom<br><select id="fNameOut" onchange="render()"></select></th>
+<th onclick="sortData('category')">Catégorie<br><select id="fCatOut" onchange="render()"></select></th>
+<th onclick="sortData('amount')">Montant</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody id="histOut"></tbody>
+</table>
+<p id="totalOut"></p>
+</div>
+</div>
+
+<div id="settings" class="container">
+<div class="grid-2">
+<div class="card">
+<h2>Catégories d'entrées</h2>
+<input id="newCatIn" placeholder="Nouvelle catégorie entrée">
+<button onclick="addCategoryIn()">Ajouter</button>
+<ul id="catListIn"></ul>
+</div>
+<div class="card">
+<h2>Catégories de dépenses</h2>
+<input id="newCatOut" placeholder="Nouvelle catégorie dépense">
+<button onclick="addCategoryOut()">Ajouter</button>
+<ul id="catListOut"></ul>
+</div>
+</div>
+</div>
+
+<script>
+let data = JSON.parse(localStorage.getItem("data")) || [];
+
+// Migration des anciennes données si nécessaire
+let oldCategories = JSON.parse(localStorage.getItem("cats"));
+let categoriesIn = JSON.parse(localStorage.getItem("categoriesIn")) || (oldCategories ? [...oldCategories] : ["Consultation","Acte","Honoraires"]);
+let categoriesOut = JSON.parse(localStorage.getItem("categoriesOut")) || (oldCategories ? [...oldCategories] : ["Matériel","Loyer","Personnel"]);
+
+let chartInstance = null;
+let catInChart = null;
+let catOutChart = null;
+let currentSort = {key:null, asc:true};
+
+// Stockage des catégories sélectionnées pour les graphiques
+let selectedCategoriesIn = JSON.parse(localStorage.getItem("selectedCategoriesIn")) || [];
+let selectedCategoriesOut = JSON.parse(localStorage.getItem("selectedCategoriesOut")) || [];
+
+// Palette de couleurs pour les catégories
+const colorPalette = [
+    'rgba(75, 192, 192, 0.7)',
+    'rgba(54, 162, 235, 0.7)',
+    'rgba(153, 102, 255, 0.7)',
+    'rgba(255, 159, 64, 0.7)',
+    'rgba(255, 205, 86, 0.7)',
+    'rgba(201, 203, 207, 0.7)',
+    'rgba(255, 99, 132, 0.7)',
+    'rgba(75, 192, 192, 0.7)',
+];
+
+const colorPaletteOut = [
+    'rgba(255, 99, 132, 0.7)',
+    'rgba(255, 159, 64, 0.7)',
+    'rgba(255, 205, 86, 0.7)',
+    'rgba(201, 203, 207, 0.7)',
+    'rgba(54, 162, 235, 0.7)',
+    'rgba(153, 102, 255, 0.7)',
+    'rgba(75, 192, 192, 0.7)',
+];
+
+function save(){ 
+    localStorage.setItem("data", JSON.stringify(data)); 
+    localStorage.setItem("categoriesIn", JSON.stringify(categoriesIn)); 
+    localStorage.setItem("categoriesOut", JSON.stringify(categoriesOut)); 
+    localStorage.setItem("selectedCategoriesIn", JSON.stringify(selectedCategoriesIn));
+    localStorage.setItem("selectedCategoriesOut", JSON.stringify(selectedCategoriesOut));
+    localStorage.removeItem("cats");
+}
+
+function toggleDark(){ document.body.classList.toggle("dark"); }
+function showPage(p){ document.querySelectorAll('.container').forEach(c=>c.classList.remove('active')); document.getElementById(p).classList.add('active'); }
+
+function match(val, filter){ return !filter || val==filter; }
+
+function fillSelect(el, values){ el.innerHTML = '<option value="">Tous</option>'; values.forEach(v=> el.innerHTML += `<option value="${v}">${v}</option>`); }
+function unique(arr,key,type){ return [...new Set(arr.filter(d=> type==='in'? d.amount>0:d.amount<0).map(d=>d[key]))]; }
+
+function populateFilters(){
+let valDateIn = fDateIn.value, valRefIn = fRefIn.value, valNameIn = fNameIn.value, valCatIn = fCatIn.value;
+let valDateOut = fDateOut.value, valRefOut = fRefOut.value, valNameOut = fNameOut.value, valCatOut = fCatOut.value;
+
+fillSelect(fDateIn, unique(data,'date','in'));
+fillSelect(fRefIn, unique(data,'ref','in'));
+fillSelect(fNameIn, unique(data,'name','in'));
+fillSelect(fCatIn, unique(data,'category','in'));
+
+fillSelect(fDateOut, unique(data,'date','out'));
+fillSelect(fRefOut, unique(data,'ref','out'));
+fillSelect(fNameOut, unique(data,'name','out'));
+fillSelect(fCatOut, unique(data,'category','out'));
+
+fDateIn.value = valDateIn; fRefIn.value = valRefIn; fNameIn.value = valNameIn; fCatIn.value = valCatIn;
+fDateOut.value = valDateOut; fRefOut.value = valRefOut; fNameOut.value = valNameOut; fCatOut.value = valCatOut;
+}
+
+function populateCats(){
+    catIn.innerHTML=""; catOut.innerHTML="";
+    categoriesIn.forEach(c=>{ catIn.innerHTML+=`<option>${c}</option>`; });
+    categoriesOut.forEach(c=>{ catOut.innerHTML+=`<option>${c}</option>`; });
+    
+    catListIn.innerHTML="";
+    categoriesIn.forEach((c,i)=> catListIn.innerHTML+=`<li>${c} <button onclick="delCatIn(${i})">x</button></li>`);
+    
+    catListOut.innerHTML="";
+    categoriesOut.forEach((c,i)=> catListOut.innerHTML+=`<li>${c} <button onclick="delCatOut(${i})">x</button></li>`);
+}
+
+function populateCategoryFilters(){
+    // Initialiser les catégories sélectionnées si vides
+    if(selectedCategoriesIn.length === 0) selectedCategoriesIn = [...categoriesIn];
+    if(selectedCategoriesOut.length === 0) selectedCategoriesOut = [...categoriesOut];
+    
+    // Filtres pour les entrées
+    const catInFiltersDiv = document.getElementById('catInFilters');
+    catInFiltersDiv.innerHTML = '';
+    categoriesIn.forEach(cat => {
+        const checked = selectedCategoriesIn.includes(cat) ? 'checked' : '';
+        catInFiltersDiv.innerHTML += `
+            <label>
+                <input type="checkbox" value="${cat}" ${checked} onchange="toggleCategoryIn('${cat}')">
+                ${cat}
+            </label>
+        `;
+    });
+    
+    // Filtres pour les dépenses
+    const catOutFiltersDiv = document.getElementById('catOutFilters');
+    catOutFiltersDiv.innerHTML = '';
+    categoriesOut.forEach(cat => {
+        const checked = selectedCategoriesOut.includes(cat) ? 'checked' : '';
+        catOutFiltersDiv.innerHTML += `
+            <label>
+                <input type="checkbox" value="${cat}" ${checked} onchange="toggleCategoryOut('${cat}')">
+                ${cat}
+            </label>
+        `;
+    });
+}
+
+function toggleCategoryIn(cat){
+    const index = selectedCategoriesIn.indexOf(cat);
+    if(index > -1){
+        selectedCategoriesIn.splice(index, 1);
+    } else {
+        selectedCategoriesIn.push(cat);
+    }
+    save();
+    renderCategoryCharts();
+}
+
+function toggleCategoryOut(cat){
+    const index = selectedCategoriesOut.indexOf(cat);
+    if(index > -1){
+        selectedCategoriesOut.splice(index, 1);
+    } else {
+        selectedCategoriesOut.push(cat);
+    }
+    save();
+    renderCategoryCharts();
+}
+
+function addCategoryIn(){ 
+    if(newCatIn.value){ 
+        categoriesIn.push(newCatIn.value); 
+        selectedCategoriesIn.push(newCatIn.value);
+        newCatIn.value=""; 
+        save(); 
+        render(); 
+    } 
+}
+
+function addCategoryOut(){ 
+    if(newCatOut.value){ 
+        categoriesOut.push(newCatOut.value); 
+        selectedCategoriesOut.push(newCatOut.value);
+        newCatOut.value=""; 
+        save(); 
+        render(); 
+    } 
+}
+
+function delCatIn(i){ 
+    const catToRemove = categoriesIn[i];
+    categoriesIn.splice(i,1); 
+    selectedCategoriesIn = selectedCategoriesIn.filter(c => c !== catToRemove);
+    save(); 
+    render(); 
+}
+
+function delCatOut(i){ 
+    const catToRemove = categoriesOut[i];
+    categoriesOut.splice(i,1); 
+    selectedCategoriesOut = selectedCategoriesOut.filter(c => c !== catToRemove);
+    save(); 
+    render(); 
+}
+
+function addIncome(){ 
+    let amt=parseFloat(amountIn.value); 
+    if(!amt)return; 
+    data.push({
+        type:"Entrée",
+        date:dateIn.value,
+        ref:refIn.value || "",
+        name:nameIn.value,
+        category:catIn.value,
+        amount:amt
+    }); 
+    save(); 
+    render(); 
+}
+
+function addExpense(){ 
+    let amt=parseFloat(amountOut.value); 
+    if(!amt)return; 
+    data.push({
+        type:"Dépense",
+        date:dateOut.value,
+        ref:refOut.value || "",
+        name:nameOut.value,
+        category:catOut.value,
+        amount:-amt
+    }); 
+    save(); 
+    render(); 
+}
+
+function sortData(key){ if(currentSort.key===key) currentSort.asc=!currentSort.asc; else currentSort={key,asc:true}; render(); }
+
+function render(){
+populateCats(); 
+populateFilters();
+populateCategoryFilters();
+
+let sorted=[...data];
+if(currentSort.key){ sorted.sort((a,b)=> currentSort.asc ? (a[currentSort.key]>b[currentSort.key]?1:-1):(a[currentSort.key]<b[currentSort.key]?1:-1)); }
+
+// Totaux globaux (TOUJOURS sur tout)
+let caGlobal = data.filter(d=>d.amount>0).reduce((a,b)=>a+b.amount,0);
+let depGlobal = data.filter(d=>d.amount<0).reduce((a,b)=>a+Math.abs(b.amount),0);
+
+// Totaux filtrés
+let ca=0,dep=0;
+histIn.innerHTML=""; histOut.innerHTML="";
+
+sorted.forEach((d,i)=>{
+let row=`<tr><td>${d.date}</td><td>${d.ref}</td><td>${d.name}</td><td>${d.category}</td><td>${d.amount}€</td><td><button onclick="edit(${i})">✏️</button></td></tr>`;
+
+if(d.amount>0){
+if(match(d.date,fDateIn.value)&&match(d.ref,fRefIn.value)&&match(d.name,fNameIn.value)&&match(d.category,fCatIn.value)){
+histIn.innerHTML+=row; ca+=d.amount;
+}
+}else{
+if(match(d.date,fDateOut.value)&&match(d.ref,fRefOut.value)&&match(d.name,fNameOut.value)&&match(d.category,fCatOut.value)){
+histOut.innerHTML+=row; dep+=Math.abs(d.amount);
+}
+}
+});
+
+// affichage
+caEl = document.getElementById("ca"); depEl = document.getElementById("dep"); benefEl = document.getElementById("benef");
+caEl.innerText = caGlobal+" €";
+depEl.innerText = depGlobal+" €";
+benefEl.innerText = (caGlobal-depGlobal)+" €";
+
+document.getElementById("totalIn").innerText="Total filtré: "+ca+" €";
+document.getElementById("totalOut").innerText="Total filtré: "+dep+" €";
+
+renderChart();
+renderCategoryCharts();
+}
+
+function renderChart(){
+let byMonth=Array(12).fill(0);
+data.forEach(d=> {
+    if(d.date) byMonth[new Date(d.date).getMonth()]+=d.amount;
+});
+if(chartInstance) chartInstance.destroy();
+chartInstance=new Chart(lineChart,{type:'line',data:{labels:["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"],datasets:[{label:"Cashflow",data:byMonth}]}});
+}
+
+function renderCategoryCharts(){
+    const monthLabels = ["Jan","Fév","Mar","Avr","Mai","Juin","Juil","Août","Sep","Oct","Nov","Déc"];
+    
+    // Préparer les données mensuelles pour les entrées
+    let inDataByCategory = {};
+    selectedCategoriesIn.forEach(cat => {
+        inDataByCategory[cat] = Array(12).fill(0);
+    });
+    
+    // Préparer les données mensuelles pour les dépenses
+    let outDataByCategory = {};
+    selectedCategoriesOut.forEach(cat => {
+        outDataByCategory[cat] = Array(12).fill(0);
+    });
+    
+    // Remplir les données
+    data.forEach(d => {
+        if(d.date) {
+            const month = new Date(d.date).getMonth();
+            if(d.amount > 0 && inDataByCategory[d.category] !== undefined) {
+                inDataByCategory[d.category][month] += d.amount;
+            } else if(d.amount < 0 && outDataByCategory[d.category] !== undefined) {
+                outDataByCategory[d.category][month] += Math.abs(d.amount);
+            }
+        }
+    });
+    
+    // Créer les datasets pour les entrées
+    let inDatasets = [];
+    selectedCategoriesIn.forEach((cat, index) => {
+        inDatasets.push({
+            label: cat,
+            data: inDataByCategory[cat],
+            backgroundColor: colorPalette[index % colorPalette.length],
+            borderColor: colorPalette[index % colorPalette.length].replace('0.7', '1'),
+            borderWidth: 1
+        });
+    });
+    
+    // Créer les datasets pour les dépenses
+    let outDatasets = [];
+    selectedCategoriesOut.forEach((cat, index) => {
+        outDatasets.push({
+            label: cat,
+            data: outDataByCategory[cat],
+            backgroundColor: colorPaletteOut[index % colorPaletteOut.length],
+            borderColor: colorPaletteOut[index % colorPaletteOut.length].replace('0.7', '1'),
+            borderWidth: 1
+        });
+    });
+
+    // Graphique en barres empilées pour les entrées
+    if(catInChart) catInChart.destroy();
+    
+    const catInCanvas = document.getElementById('catInChart');
+    if(catInCanvas && inDatasets.length > 0){
+        catInChart = new Chart(catInCanvas, {
+            type: 'bar',
+            data: {
+                labels: monthLabels,
+                datasets: inDatasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    x: {
+                        stacked: true
+                    },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top'
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false
+                    }
+                }
+            }
+        });
+    } else if(catInCanvas) {
+        const ctx = catInCanvas.getContext('2d');
+        ctx.clearRect(0, 0, catInCanvas.width, catInCanvas.height);
+        ctx.font = '16px Arial';
+        ctx.fillStyle = '#999';
+        ctx.textAlign = 'center';
+        ctx.fillText('Aucune catégorie sélectionnée', catInCanvas.width/2, catInCanvas.height/2);
+    }
+
+    // Graphique en barres empilées pour les dépenses
+    if(catOutChart) catOutChart.destroy();
+    
+    const catOutCanvas = document.getElementById('catOutChart');
+    if(catOutCanvas && outDatasets.length > 0){
+        catOutChart = new Chart(catOutCanvas, {
+            type: 'bar',
+            data: {
+                labels: monthLabels,
+                datasets: outDatasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                scales: {
+                    x: {
+                        stacked: true
+                    },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top'
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false
+                    }
+                }
+            }
+        });
+    } else if(catOutCanvas) {
+        const ctx = catOutCanvas.getContext('2d');
+        ctx.clearRect(0, 0, catOutCanvas.width, catOutCanvas.height);
+        ctx.font = '16px Arial';
+        ctx.fillStyle = '#999';
+        ctx.textAlign = 'center';
+        ctx.fillText('Aucune catégorie sélectionnée', catOutCanvas.width/2, catOutCanvas.height/2);
+    }
+}
+
+function edit(i){ let d=data[i]; if(d.amount>0){showPage('income');dateIn.value=d.date;refIn.value=d.ref;nameIn.value=d.name;amountIn.value=Math.abs(d.amount);} else{showPage('expense');dateOut.value=d.date;refOut.value=d.ref;nameOut.value=d.name;amountOut.value=Math.abs(d.amount);} data.splice(i,1); save(); render(); }
+
+render();
+</script>
+</body>
+</html>
